@@ -5,8 +5,15 @@ File must be named `api.py`
 import noxpy
 
 def NoxMain():
-    print("Hello from main.py NoxMain()")
-    noxpy.test()
+    print("Init from Python")
+    nox = noxpy.initNox()
+
+    def get_handler(resp, req):
+        print("GET handler from python called")
+        return
+    
+    nox.createGet("/test", get_handler)
+
 ```
 
 ### To-do
