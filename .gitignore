@@ -1,0 +1,7 @@
+__pycache__
+.vscode
+*.so
+*.dll
+*.exe
+*.a
+*.o

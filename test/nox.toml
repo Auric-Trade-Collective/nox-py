@@ -1,0 +1,7 @@
+[nox]
+addr = ":5432"
+root = "./www"
+api = "./abi/libapi.dll"
+
+[nox.tls]
+enabled = false
