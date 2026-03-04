@@ -2,18 +2,22 @@
 #define WEBAPI_H
 
 #include <stdint.h>
-#include <string.h> 
+#include <string.h>
 #include <dlfcn.h> 
 #include <stdlib.h>
 #include <stdio.h>
+#include "dlls.h"
 
 typedef struct {
-    void *lib_handle;
-} DllManager;
+    uintptr_t gohandle;
 
-typedef struct {
     char *endpoint;
     char *method;
+    char *remoteAddr;
+    
+    // uintptr_t headers;
+    // uintptr_t body;
+    // uintptr_t url;
 } HttpRequest;
 
 typedef struct {
@@ -25,7 +29,7 @@ typedef void (*apiCallback)(HttpResponse *, HttpRequest *);
 typedef struct {
     char *endpoint;
     apiCallback callback;
-    int method;
+    int method; //0 GET, 1 POST, 2 PUT, 3 DELETE
 } NoxEndpoint;
 
 
@@ -35,7 +39,7 @@ typedef struct {
     NoxEndpoint *endpoints;
 } NoxEndpointCollection;
 
-typedef void (*createEndpoint)(NoxEndpointCollection*, char*, apiCallback);
+typedef void (*createEndpoint)(NoxEndpointCollection*, char*, apiCallback, int);
 typedef void (*createNox)(NoxEndpointCollection*);
 
 static inline char * SanitizePath(char *buff) {
@@ -63,7 +67,7 @@ static inline char * SanitizePath(char *buff) {
 
 static inline void CreateNoxEndpoint(NoxEndpointCollection *coll, char *endpoint, apiCallback callback, int method) {
     char *sEndp = SanitizePath(strdup(endpoint));
-    NoxEndpoint endp = { .endpoint = sEndp, .callback = callback, .method = method};
+    NoxEndpoint endp = { .endpoint = sEndp, .callback = callback, .method = method };
     
     NoxEndpoint *ep = (NoxEndpoint *)malloc(sizeof(NoxEndpoint) * (coll->endpointCount + 1));
     memcpy(ep, coll->endpoints, sizeof(NoxEndpoint) * coll->endpointCount);
@@ -74,23 +78,50 @@ static inline void CreateNoxEndpoint(NoxEndpointCollection *coll, char *endpoint
     coll->endpointCount++;
 }
 
+static inline NoxEndpointCollection *LoadApi(char *location) {
+    DllManager *dll = LoadDll(location);
+    if(dll == NULL) {
+        return NULL;
+    }
+
+    NoxEndpointCollection *coll = (NoxEndpointCollection*)malloc(sizeof(NoxEndpointCollection));
+    coll->dll = dll;
+    coll->endpointCount = 0;
+    coll->endpoints = NULL;
+
+    createNox create = (createNox)dlsym(dll->lib_handle, "CreateNoxApi");
+
+    if(create == NULL) {
+        printf("Failed to create nox\n");
+        return NULL;
+    }
+
+    create(coll);
+
+    return coll;
+}
+
+
+static inline void CloseApi(NoxEndpointCollection *coll) {
+    if(coll == NULL) return;
+
+    if(coll->dll) {
+        CloseDll(coll->dll);
+    }
+
+    if(coll->endpoints) {
+        for(int i = 0; i < coll->endpointCount; i++) {
+            free(coll->endpoints[i].endpoint);
+        }
+        free(coll->endpoints);
+    }
+
+    free(coll);
+}
 
 static inline void InvokeApiCallback(apiCallback cb, HttpResponse *resp, HttpRequest *req) {
     cb(resp, req);
 }
-
-static inline void InvokeEndp(int method, NoxEndpointCollection *coll, char *endp, apiCallback fun) {
-    CreateNoxEndpoint(coll, endp, fun, method);
-}
-
-__attribute__((weak))
-void EndpointHandler(HttpResponse *resp, HttpRequest *req);
-
-static inline void InvokeGoLogic(HttpResponse *resp, HttpRequest *req) {
-    EndpointHandler(resp, req);
-}
-
-void NoxMain();
 
 //Here is where the JSON and Stream helpers will exist
 //This includes exported function defs, some types, and C logic
@@ -166,12 +197,19 @@ void WriteCopy(HttpResponse *resp, NoxData *dat);
 __attribute__((warning("WriteMove: This function takes ownership of all pointer and buffer parameters! Please do not free them!")))
 void WriteMove(HttpResponse *resp, NoxData *dat);
 
-__attribute__((weak))
 void WriteText(HttpResponse *resp, char *buff, int len);
 void WriteFile(HttpResponse *resp, NoxData *dat);
 
-static inline void *GetInvokeGo() {
-    return (void*)InvokeGoLogic;
-}
+
+void CreateGet(NoxEndpointCollection *collection, char *path, apiCallback callback);
+void CreatePost(NoxEndpointCollection *collection, char *path, apiCallback callback);
+void CreatePut(NoxEndpointCollection *collection, char *path, apiCallback callback);
+void CreateDelete(NoxEndpointCollection *collection, char *path, apiCallback callback);
+
+size_t ReadBody(HttpRequest *req, uint8_t *buff, size_t bytesToRead);
+
+char *GetUri(HttpRequest *req, size_t *outLength);
+char *GetUriParam(HttpRequest *req, char *paramName, size_t index, size_t *outLength);
+size_t GetUriParamCount(HttpRequest *req, char *paramName);
 
 #endif

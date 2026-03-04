@@ -9,7 +9,9 @@ def NoxMain():
     nox = noxpy.initNox()
 
     def get_handler(resp, req):
-        print("GET handler from python called")
+        msg = f"GET {req.endpoint} from {req.remoteAddr}"
+        print(msg)
+        resp.writeText(msg)
         return
     
     nox.createGet("/test", get_handler)
@@ -21,11 +23,19 @@ def NoxMain():
 - [ ] Better repeated init blockage like shown in [docs](https://docs.python.org/3/extending/extending.html)
 - [x] initNox
 - [x] CreateGet
-- [ ] CreatePost
-- [ ] CreatePut
-- [ ] CreateDelete
+- [x] CreatePost
+- [x] CreatePut
+- [x] CreateDelete
 - [ ] WriteBuff
-- [ ] WriteText
+- [x] WriteText
 - [ ] WriteFile
 - [ ] WriteJson
 - [ ] probably more I forgor
+
+### Explaining Each File
+- `core.c`: The host entrypoint, `CreateNoxApi`.
+- `module.c`: The actual python module entrypoint, as well as `initNox()`.
+- `create_functions.c`: Python functions for createGet, createPost, etc.
+- `write_functions.c`: Python functions for writeText, writeJson, etc.
+- `request_types.c`: Things for request py object.
+- `response_types.c`: Things for response py object.

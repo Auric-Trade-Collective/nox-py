@@ -1,4 +1,5 @@
 #!/bin/bash
 
-gcc -shared -o libapi.so -fPIC noxpy.c $(python3-config --cflags --ldflags --embed)
-echo "Done"
+echo "Building..."
+gcc -shared -fPIC -Wall -o libapi.so -fPIC src/*.c -Isrc/include $(python3-config --cflags --ldflags --embed)
+echo "Done."

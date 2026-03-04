@@ -5,3 +5,4 @@ __pycache__
 *.exe
 *.a
 *.o
+test/nox

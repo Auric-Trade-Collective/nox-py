@@ -1,7 +1,7 @@
 [nox]
-addr = ":5432"
+addr = "0.0.0.0:5432"
 root = "./www"
-api = "./abi/libapi.dll"
+api = "./abi/libapi.so"
 
 [nox.tls]
 enabled = false
