@@ -36,9 +36,21 @@ jobs:
 
       - name: Run clang-tidy
         run: |
-          find . -name "*.c" -not -path "*/test/*" | xargs clang-tidy \
+          # Ubuntu 'clang-tidy' metapackage may be a stub; use versioned binary
+          CLANG_TIDY=$(command -v clang-tidy-18 || command -v clang-tidy-17 || command -v clang-tidy)
+          PY_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
+      
+          FILES=$(find . -name "*.c" -not -path "*/test/*" | sort)
+          if [ -z "$FILES" ]; then
+            echo "No C source files found."
+            exit 0
+          fi
+      
+          echo "$FILES" | xargs "$CLANG_TIDY" \
             --checks="-*,bugprone-*,cert-*,clang-analyzer-*,portability-*" \
-            -- -I/usr/include/python3.$(python3 -c "import sys; print(sys.version_info.minor)") \
+            -- \
+            -I/usr/include/python3.${PY_MINOR} \
+            -Isrc/include \
             -I. 2>&1 || true
 
   # ---------------------------------------------------------------------------
