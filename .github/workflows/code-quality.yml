@@ -1,8 +1,8 @@
 # =============================================================================
 # nox-py - Code Quality & Security Workflow
 # CPython extension module (C + Python bindings)
-# Tools: Semgrep OSS (C + Python rules), clang-tidy (C), Ruff (Python),
-#        Reviewdog, sticky PR comment
+# Tools: Semgrep OSS (C + Python rules), cpp-linter (clang-tidy, C),
+#        Ruff (Python), sticky PR comment
 # Triggers: Pull requests to main + push to main (for branch protection)
 # =============================================================================
 
@@ -21,7 +21,7 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # clang-tidy - C static analysis, understands CPython extension patterns
+  # clang-tidy - C static analysis via cpp-linter-action
   # ---------------------------------------------------------------------------
   clang-tidy:
     name: clang-tidy
@@ -29,22 +29,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install clang-tidy and Python dev headers
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y clang-tidy python3-dev
-
-      - name: Run clang-tidy
-        run: |
-          CLANG_TIDY=$(command -v clang-tidy-18 || command -v clang-tidy-17 || command -v clang-tidy)
-          PY_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
-          find . -name "*.c" -not -path "*/test/*" -not -name "old_noxpy.c" -print0 \
-            | xargs -r -0 "$CLANG_TIDY" \
-                --checks="-*,bugprone-*,cert-*,clang-analyzer-*,portability-*" \
-                -- \
-                -I/usr/include/python3.${PY_MINOR} \
-                -Isrc/include \
-                -I. 2>&1 || true
+      - uses: cpp-linter/cpp-linter-action@v2
+        id: linter
+        with:
+          style: ''
+          tidy-checks: '-*,bugprone-*,cert-*,clang-analyzer-*,portability-*'
+          files-changed-only: false
+          extra-args: >-
+            -I/usr/include/python3.12
+            -Isrc/include
+            -I.
+          ignore: 'test|old_noxpy.c'
 
   # ---------------------------------------------------------------------------
   # Ruff - Python linter/formatter for the Python binding code
@@ -78,7 +73,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -q
-          sudo apt-get install -y clang-tidy python3-dev
+          sudo apt-get install -y python3-dev
           pip install semgrep ruff
 
       - name: Install Reviewdog
@@ -86,26 +81,19 @@ jobs:
         with:
           reviewdog_version: latest
 
-      # clang-tidy inline annotations
-      - name: clang-tidy annotations
-        env:
-          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          CLANG_TIDY=$(command -v clang-tidy-18 || command -v clang-tidy-17 || command -v clang-tidy)
-          PY_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
-          find . -name "*.c" -not -path "*/test/*" -not -name "old_noxpy.c" -print0 \
-            | xargs -r -0 "$CLANG_TIDY" \
-                --checks="-*,bugprone-*,cert-*,clang-analyzer-*,portability-*" \
-                -- \
-                -I/usr/include/python3.${PY_MINOR} \
-                -Isrc/include \
-                -I. 2>&1 \
-            | reviewdog -f=clang-tidy \
-                -name="clang-tidy" \
-                -reporter=github-check \
-                -filter-mode=added \
-                -level=warning \
-                -fail-level=none || true
+      # clang-tidy inline annotations via cpp-linter-action
+      - uses: cpp-linter/cpp-linter-action@v2
+        id: linter
+        with:
+          style: ''
+          tidy-checks: '-*,bugprone-*,cert-*,clang-analyzer-*,portability-*'
+          files-changed-only: true
+          extra-args: >-
+            -I/usr/include/python3.12
+            -Isrc/include
+            -I.
+          ignore: 'test|old_noxpy.c'
+          thread-comments: false
 
       # Ruff inline annotations
       - name: Ruff annotations
@@ -147,16 +135,9 @@ jobs:
       - name: Capture clang-tidy output
         id: clang
         run: |
-          CLANG_TIDY=$(command -v clang-tidy-18 || command -v clang-tidy-17 || command -v clang-tidy)
-          PY_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
-          OUTPUT=$(find . -name "*.c" -not -path "*/test/*" -not -name "old_noxpy.c" -print0 \
-            | xargs -r -0 "$CLANG_TIDY" \
-                --checks="-*,bugprone-*,cert-*,clang-analyzer-*,portability-*" \
-                -- \
-                -I/usr/include/python3.${PY_MINOR} \
-                -Isrc/include \
-                -I. 2>&1 || true)
-          if [ -z "$OUTPUT" ]; then
+          if [ "${{ steps.linter.outputs.checks-failed }}" -gt 0 ]; then
+            OUTPUT="⚠️ clang-tidy reported ${{ steps.linter.outputs.checks-failed }} issue(s). See the Checks tab for details."
+          else
             OUTPUT="✅ No issues found."
           fi
           {
@@ -237,9 +218,7 @@ jobs:
             <details open>
             <summary><b>🔧 clang-tidy (C)</b></summary>
 
-            ```
             ${{ steps.clang.outputs.result }}
-            ```
 
             </details>
 
