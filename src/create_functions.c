@@ -2,6 +2,7 @@
 #include "noxpy.h"
 #include "enums.h"
 
+
 // Global defs
 NoxObject* Nox = NULL;
 NoxEndpointCollection* NoxEndpoints = NULL;
