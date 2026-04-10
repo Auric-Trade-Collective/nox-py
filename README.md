@@ -1,3 +1,5 @@
+# Not up-to-date, do not use. Still in development.
+
 Proper README coming once fully functional.
 
 File must be named `api.py`
