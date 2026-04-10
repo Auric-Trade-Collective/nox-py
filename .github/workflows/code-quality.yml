@@ -81,9 +81,11 @@ jobs:
         with:
           reviewdog_version: latest
 
-      # clang-tidy inline annotations via cpp-linter-action
+      # clang-tidy - run, post inline annotations, and capture output for comment
       - uses: cpp-linter/cpp-linter-action@v2
         id: linter
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           style: ''
           tidy-checks: '-*,bugprone-*,cert-*,clang-analyzer-*,portability-*'
@@ -94,6 +96,32 @@ jobs:
             -I.
           ignore: 'test|old_noxpy.c'
           thread-comments: false
+          file-annotations: true
+          tidy-review: false
+
+      # Capture clang-tidy output by re-running quietly into a file
+      - name: Capture clang-tidy output
+        id: clang
+        run: |
+          CLANG_TIDY=$(command -v clang-tidy-20 || command -v clang-tidy-18 || command -v clang-tidy)
+          PY_MINOR=$(python3 -c "import sys; print(sys.version_info.minor)")
+          OUTPUT=$(find . -name "*.c" -o -name "*.h" \
+            | grep -v '/test/' | grep -v 'old_noxpy.c' | grep -v '.github' \
+            | xargs -r "$CLANG_TIDY" \
+                --checks="-*,bugprone-*,cert-*,clang-analyzer-*,portability-*" \
+                -- \
+                -I/usr/include/python3.${PY_MINOR} \
+                -Isrc/include \
+                -I. 2>&1 \
+            | grep -E "warning:|error:" || true)
+          if [ -z "$OUTPUT" ]; then
+            OUTPUT="✅ No issues found."
+          fi
+          {
+            echo "result<<EOF"
+            echo "$OUTPUT"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
 
       # Ruff inline annotations
       - name: Ruff annotations
@@ -130,21 +158,6 @@ jobs:
             -level=warning \
             -fail-level=none \
             < semgrep.sarif || true
-
-      # Capture clang-tidy output for summary
-      - name: Capture clang-tidy output
-        id: clang
-        run: |
-          if [ "${{ steps.linter.outputs.checks-failed }}" -gt 0 ]; then
-            OUTPUT="⚠️ clang-tidy reported ${{ steps.linter.outputs.checks-failed }} issue(s). See the Checks tab for details."
-          else
-            OUTPUT="✅ No issues found."
-          fi
-          {
-            echo "result<<EOF"
-            echo "$OUTPUT"
-            echo "EOF"
-          } >> $GITHUB_OUTPUT
 
       # Capture Ruff output for summary
       - name: Capture Ruff output
@@ -218,7 +231,9 @@ jobs:
             <details open>
             <summary><b>🔧 clang-tidy (C)</b></summary>
 
+            ```
             ${{ steps.clang.outputs.result }}
+            ```
 
             </details>
 
