@@ -1,0 +1,247 @@
+# =============================================================================
+# nox-py - Code Quality & Security Workflow
+# CPython extension module (C + Python bindings)
+# Tools: Semgrep OSS (C + Python rules), clang-tidy (C), Ruff (Python),
+#        Reviewdog, sticky PR comment
+# Triggers: Pull requests to main + push to main (for branch protection)
+# =============================================================================
+
+name: Code Quality & Security
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # clang-tidy - C static analysis, understands CPython extension patterns
+  # ---------------------------------------------------------------------------
+  clang-tidy:
+    name: clang-tidy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install clang-tidy and Python dev headers
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y clang-tidy python3-dev
+
+      - name: Run clang-tidy
+        run: |
+          find . -name "*.c" -not -path "*/test/*" | xargs clang-tidy \
+            --checks="-*,bugprone-*,cert-*,clang-analyzer-*,portability-*" \
+            -- -I/usr/include/python3.$(python3 -c "import sys; print(sys.version_info.minor)") \
+            -I. 2>&1 || true
+
+  # ---------------------------------------------------------------------------
+  # Ruff - Python linter/formatter for the Python binding code
+  # ---------------------------------------------------------------------------
+  ruff:
+    name: ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ruff
+        run: pip install ruff
+
+      - name: Run Ruff
+        run: ruff check . || true
+
+  # ---------------------------------------------------------------------------
+  # Report - inline annotations + sticky PR comment
+  # ---------------------------------------------------------------------------
+  report:
+    name: PR Quality Report
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    permissions:
+      pull-requests: write
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y clang-tidy python3-dev
+          pip install semgrep ruff
+
+      - name: Install Reviewdog
+        uses: reviewdog/action-setup@v1
+        with:
+          reviewdog_version: latest
+
+      # clang-tidy inline annotations
+      - name: clang-tidy annotations
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          find . -name "*.c" -not -path "*/test/*" | xargs clang-tidy \
+            --checks="-*,bugprone-*,cert-*,clang-analyzer-*,portability-*" \
+            -- -I/usr/include/python3.$(python3 -c "import sys; print(sys.version_info.minor)") \
+            -I. 2>&1 | \
+          reviewdog -f=clang-tidy \
+            -name="clang-tidy" \
+            -reporter=github-check \
+            -filter-mode=added \
+            -level=warning \
+            -fail-level=none || true
+
+      # Ruff inline annotations
+      - name: Ruff annotations
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ruff check --output-format=pylint . 2>&1 | \
+          reviewdog -f=pylint \
+            -name="ruff" \
+            -reporter=github-check \
+            -filter-mode=added \
+            -level=warning \
+            -fail-level=none || true
+
+      # Semgrep - C and Python security rules
+      - name: Run Semgrep
+        run: |
+          semgrep \
+            --config "p/c" \
+            --config "p/python" \
+            --config "p/security-audit" \
+            --config "p/secrets" \
+            --sarif \
+            --output semgrep.sarif || true
+
+      - name: Semgrep annotations
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          reviewdog -f=sarif \
+            -name="semgrep" \
+            -reporter=github-check \
+            -filter-mode=added \
+            -level=warning \
+            -fail-level=none \
+            < semgrep.sarif || true
+
+      # Capture clang-tidy output for summary
+      - name: Capture clang-tidy output
+        id: clang
+        run: |
+          OUTPUT=$(find . -name "*.c" -not -path "*/test/*" | xargs clang-tidy \
+            --checks="-*,bugprone-*,cert-*,clang-analyzer-*,portability-*" \
+            -- -I/usr/include/python3.$(python3 -c "import sys; print(sys.version_info.minor)") \
+            -I. 2>&1 || true)
+          if [ -z "$OUTPUT" ]; then
+            OUTPUT="✅ No issues found."
+          fi
+          {
+            echo "result<<EOF"
+            echo "$OUTPUT"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      # Capture Ruff output for summary
+      - name: Capture Ruff output
+        id: ruff
+        run: |
+          OUTPUT=$(ruff check . 2>&1 || true)
+          if [ -z "$OUTPUT" ]; then
+            OUTPUT="✅ No issues found."
+          fi
+          {
+            echo "result<<EOF"
+            echo "$OUTPUT"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      # Parse Semgrep SARIF into readable list
+      - name: Parse Semgrep output
+        id: semgrep
+        env:
+          SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          OUTPUT=$(python3 << 'PYEOF'
+          import json, os
+
+          sha = os.environ.get('SHA', '')
+          repo = os.environ.get('REPO', '')
+          base_url = f"https://github.com/{repo}/blob/{sha}"
+
+          try:
+            with open('semgrep.sarif') as f:
+              data = json.load(f)
+            findings = []
+            for run in data.get('runs', []):
+              for r in run.get('results', []):
+                msg = r.get('message', {}).get('text', '').strip()
+                rule = r.get('ruleId', 'unknown')
+                sev = r.get('level', 'warning').upper()
+                for loc in r.get('locations', []):
+                  uri = loc.get('physicalLocation', {}).get('artifactLocation', {}).get('uri', '')
+                  line = loc.get('physicalLocation', {}).get('region', {}).get('startLine', 1)
+                  link = f"[{uri}:{line}]({base_url}/{uri}#L{line})"
+                  findings.append((sev, link, rule, msg))
+            if findings:
+              for sev, link, rule, msg in findings:
+                print(f"**{sev}** {link} `{rule}`")
+                print(f"> {msg}")
+                print("")
+            else:
+              print("✅ No issues found.")
+          except Exception as e:
+            print(f"Error parsing semgrep output: {e}")
+          PYEOF
+          )
+          {
+            echo "result<<EOF"
+            echo "$OUTPUT"
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+      # Sticky PR comment
+      - name: Post summary comment
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: code-quality
+          message: |
+            ## 🔍 Code Quality Report
+
+            > 💡 Inline annotations are also visible in the **Checks** tab and **Files changed** tab.
+
+            <details open>
+            <summary><b>🔧 clang-tidy (C)</b></summary>
+
+            ```
+            ${{ steps.clang.outputs.result }}
+            ```
+
+            </details>
+
+            <details open>
+            <summary><b>🐍 Ruff (Python)</b></summary>
+
+            ```
+            ${{ steps.ruff.outputs.result }}
+            ```
+
+            </details>
+
+            <details open>
+            <summary><b>🔎 Semgrep</b></summary>
+
+            ${{ steps.semgrep.outputs.result }}
+
+            </details>
+
+            ---
